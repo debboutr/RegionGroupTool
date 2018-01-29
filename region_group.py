@@ -7,8 +7,6 @@ Created on Sat Nov 18 20:05:57 2017
 '-a_nodata 0 -ot UInt32 /home/rick/projects/RegionGroupTool/states.shp '
 '/home/rick/projects/RegionGroupTool/states.tif')
 
-TODO: gonna need to be able to window
-TODO: add table for matchup!
 TODO: test ortho connectivity
 TODO: add check for dtype INT
 
@@ -17,7 +15,7 @@ Schema:
     - hold -1 column to match vals across windows
     - create new values
     - add matches to link_list
-    - tricky: how to apply new values into windows so we don't trip on matches 
+    - tricky: how to apply new values into windows so we don't trip on matches
                 returned from region_group function
 @author: rick
 """
@@ -64,7 +62,7 @@ def replace(arr, inc_val, no_data):
     '''
     fin = arr.copy()
     uni_arr = np.delete(np.unique(arr), no_data)
-    for num in uni_arr: 
+    for num in uni_arr:
         a = fin.copy()
         iso = a != num
         a[iso] = no_data 
@@ -81,7 +79,7 @@ def region_group(data, incrementor=0, zone_connectivity=True):
         isolate = single != val
         single[isolate] = NDV
         grouped, num_feats = label(single, 
-                                   structure=s if zone_connectivity else None)    
+                                   structure=s if zone_connectivity else None)
         if incrementor > 0:
             replace(grouped, incrementor, NDV)
         incrementor += num_feats
@@ -102,13 +100,13 @@ if __name__ == '__main__':
             old_col_vals = []
             link  = defaultdict(list)
             incrementor = 0
-    # Can likely refactor from here???                
+    # Can likely refactor from here???
             for win in windows:
                 arr = data.read(window=win)[0]
                 # get matching vals
                 if len(c_orig) > 0: # flag every arr after the first
                     c_next = arr[:,0] # get original values in first column
-                    connect_dict = get_connections(c_orig,c_next) # retain orig vals and idxs
+                    connect_dict = get_connections(c_orig,c_next)
                 c_orig = arr[:,-1] # replace for next get_connect comparison
                 new = region_group(arr, incrementor) # make new groups
                 # get old value as key with new[:,0] index as value
@@ -119,10 +117,10 @@ if __name__ == '__main__':
                             old_val = old_col_vals[indexes[0]]
                             replace_val = new[:,0][indexes[1]]
                             np.place(new,new==replace_val,old_val)
-                print(np.unique(new))                  
+                print(np.unique(new))
                 # match vals for link table
                 new_vals = np.unique(new)
-                for new_val in np.delete(new_vals,NDV): 
+                for new_val in np.delete(new_vals,NDV):
                     item_idx = np.where(new==new_val)
                     old_val = arr[item_idx[0][0]][item_idx[1][0]]
                     if not any(new_val in e for e in link.values()):
@@ -131,7 +129,8 @@ if __name__ == '__main__':
                 incrementor = new.max()
                 print('**********')
                 dst.write(new.astype(np.int32), indexes=1, window=win)
-    link_table = pd.DataFrame([(h[0],j) for h in link.items() for j in h[1]], columns=['original_value','group_value'])
+    link_table = pd.DataFrame([(h[0],j) for h in link.items() for j in h[1]],
+                               columns=['original_value','group_value'])
     link_table.to_csv('link_table.csv',index=False)
 #win = windows[0]
 #win = windows[1]
