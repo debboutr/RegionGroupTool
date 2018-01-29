@@ -3,18 +3,30 @@
 """
 Created on Sat Nov 18 20:05:57 2017
     
-gdal_rasterize -a DRAWSEQ -tr 90.0 90.0 -l states  -co "COMPRESS=LZW" -a_nodata 0 -ot UInt32 /home/rick/projects/RegionGroupTool/states.shp /home/rick/projects/RegionGroupTool/states.tif
+('gdal_rasterize -a DRAWSEQ -tr 90.0 90.0 -l states  -co "COMPRESS=LZW" '
+'-a_nodata 0 -ot UInt32 /home/rick/projects/RegionGroupTool/states.shp '
+'/home/rick/projects/RegionGroupTool/states.tif')
 
 TODO: gonna need to be able to window
 TODO: add table for matchup!
 TODO: test ortho connectivity
 TODO: add check for dtype INT
-    
+
+Schema:
+    - get window
+    - hold -1 column to match vals across windows
+    - create new values
+    - add matches to link_list
+    - tricky: how to apply new values into windows so we don't trip on matches 
+                returned from region_group function
+    # TODO: pass max_val into region_group as incrementor!
 @author: rick
 """
 import numpy as np
+import pandas as pd
 import rasterio as rs
-from rasterio.windows import Window
+from collections import defaultdict
+#from rasterio.windows import Window
 from scipy.ndimage import label, generate_binary_structure
 
 def fix_max(a,i,d):          
@@ -50,6 +62,28 @@ def get_connect(a,b):
                 out[a[i]] = (i,j)
     return out
 
+def get_connections(a,b):
+    start = 0
+    changes = np.append(np.where(np.diff(a) != 0)[0]+1,len(a)-1)
+    keepers = defaultdict(list)
+    for stop in changes:
+#        print start,stop
+        value = a[start] # value being tracked
+        if value == NDV:
+#            print 'NDV'
+            start = stop
+            continue
+        for idx in range(start,stop): # iter all indexes of val
+            idxs = np.array(range(idx-1,idx+2)) # 3-cell window
+            idxs = idxs[idxs>=0] # remove negative idx from 0
+            same = np.where(b[idxs]==value)[0] # matches a | b
+            if same.any():
+                # appending list to key will allow for >1 index of same val
+                keepers[value].append((idx,idxs[same[0]])) #idx of 1st match val
+                break
+        start = stop
+    return keepers
+
 # make windows
 def make_windows(arr_len, num_win):
     i, wins = 0, []
@@ -72,12 +106,11 @@ def replace(arr, inc_val, no_data):
         np.place(a, a==num, (num + inc_val))
         np.copyto(arr,a, where=a!=no_data)
 
-def region_group(data, zone_connectivity=True):
-    final = np.zeros(data.shape)
+def region_group(data, incrementor=0, zone_connectivity=True):
+    final = np.zeros(data.shape,dtype=int)
     values = np.delete(np.unique(data), NDV)
     if zone_connectivity:
         s = generate_binary_structure(2,2)
-    incrementor = 0 # TODO: how should new values be generated???
     for val in values:
         single = data.copy()
         isolate = single != val
@@ -92,55 +125,65 @@ def region_group(data, zone_connectivity=True):
     return final
 
 if __name__ == '__main__':
-# TODO: negative index of b in get_connect    
     
-    with rs.open('og.tif') as data:
+#    with rs.open('og.tif') as data:
+        data = rs.open('og.tif')
         profile = data.profile
 #        with rs.open('rio_carol.tif', 'w', **profile) as dst:
 #        print data.shape
         NDV = data.nodata
         windows = make_windows(data.shape[1],4)
-        arr_max = 0
+#        arr_max = 0
         c_orig = []
         idx = {}
+        old_col_vals = []
+        link  = {}
+        incrementor = 0
         for win in windows:
             arr = data.read(window=win)[0]
 #            break
-            print(arr.shape)
-#            get matching vals
-            if len(c_orig) > 0: # they won't be the same values in new, needs to be tracked somehow
-                c_next = arr[:,0]
-                idx = get_connect(c_orig,c_next)
-            print(idx)
-            c_orig = arr[:,-1]
-            print('**********')
-#            print(len(c_orig))
-            new = region_group(arr) 
-            print(np.unique(new))
-            print('Arrays new/old')            
-            if arr_max > 0:
-                print(arr_max)
-                np.place(new, new!=NDV, new[new!=NDV]+arr_max)
-#                new = fix_max(new,arr_max,idx)
-            print(new.max())
-            print(np.unique(new))
-            if idx: #this isn't working
-                for val in idx: # get value @ index in the old arr, then val at that index in new, that's what we want to replace
-                    new_idx = idx[val][1]
-                    new_fin = new[:,0]
-                    old = new_fin[new_idx]
-                    np.place(new, new==old, val)
-            print(new.max())
-            print('**********')
-            c_new = new[:,-1]
-            arr_max = new.max()
-#            arr_max += len(np.unique(new)) - len(idx)#new.max()
-            print(np.unique(new))
-#            print(len(idx))
-            print('**********')
-            print('**********')
+            # get matching vals
+            if len(c_orig) > 0: # flag every arr after the first
+                c_next = arr[:,0] # get original values in first column
+                idx = get_connect(c_orig,c_next) # retain orig vals and idxs
+            c_orig = arr[:,-1] # replace for next get_connect comparison
+            new = region_group(arr, incrementor) # make new groups
+            #np.place(new, new!=NDV, new[new!=NDV]+arr_max+100)
+
+            # get old value as key with new[:,0] index as value
+            # TODO: remake these assignments with new func
+            if len(old_col_vals)>0 and len(idx)>0:
+                kept = {}
+                for x in idx:
+                    # key = old-value, value = index in new arr
+                    kept[old_col_vals[idx[x][0]]] = idx[x][1]
+                # replace the value 
+                for val in kept: # val will be inserted over replace_val
+                    ix = kept[val] # get index of b
+                    replace_val = new[:,-0][ix] # then it's value,one to switch
+                    np.place(new,new==replace_val,val) 
+            print(np.unique(new))                    
+            # match vals for link table
+            new_vals = np.unique(new)
+            for new_val in np.delete(new_vals,NDV): 
+                print(new_val)
+                item_idx = np.where(new==new_val)
+                old_val = arr[item_idx[0][0]][item_idx[1][0]]
+                if not old_val in link.keys():
+                    link[old_val] = new_val            
             
-# go to new, get the zeroeth column and grab the new value, build a new dict          
+            old_col_vals = new[:,-1]
+            incrementor = new.max()
+            print('**********')
+
+win = windows[1]
+link_table = pd.DataFrame(link.items(),columns=['original_value','group_value'])
+
+
+
+
+            
+# go to new, get the zeroeth column and grab the new value, build a new dict
  
         
 #win = (0,None),(0,300)
@@ -149,21 +192,24 @@ if __name__ == '__main__':
 #old_check = c[:,-1]
 #new = region_group(c)
 #np.unique(new)
-        
-    
-    
-    
-        dst.write(new.astype(rs.uint32),1)   
-    
-    
-    with rs.open('carol.tif') as data:    
-        new = region_group(data)
-        np.unique(new)
-        profile = data.profile
-    
-    
-    with rs.open('rio_carol.tif', 'w', **profile) as dst:
-        dst.write(new.astype(rs.uint32),1)        
+#l ={}
+#for x in idx:
+#    upd = new[:,0]
+#    l[upd[idx[x][0]]] = idx[x][1]
+#    
+#    
+#    
+#        dst.write(new.astype(rs.uint32),1)   
+#    
+#    
+#    with rs.open('carol.tif') as data:    
+#        new = region_group(data)
+#        np.unique(new)
+#        profile = data.profile
+#    
+#    
+#    with rs.open('rio_carol.tif', 'w', **profile) as dst:
+#        dst.write(new.astype(rs.uint32),1)
         
 
 profile['dtype']
@@ -172,9 +218,9 @@ type(rs.uint32)
 
 
 #resolve num_windows to math output
-
-make_windows(5311,3)
-Window(col_off, row_off, width, height)
+#
+#make_windows(5311,3)
+#Window(col_off, row_off, width, height)
 ######################################################################### 
 # window vertically, hold the last dim of orig values to compare w/
 # the new windows first to link values. Get the value of point where that's 
@@ -200,12 +246,8 @@ for idx, val in np.ndenumerate(d):
         win = [x-1, x]
     else:
         win = [x-1,x,x+1]
-    if val in c[win]:       
+    if val in c[win]:
         print (x, val)
-
-# TODO: (a) hold last column of windowed array of both (1)before and (2)after label        
-# TODO: get indexes of where there is a match in (a1), then get value of those in (a2)
-# TODO: 
 
 
 
@@ -247,13 +289,13 @@ np.place(z, z>0, z[z>0]+y.max())
 #    values = np.delete(np.unique(geo_raster.raster.data), NDV)
 #    if zone_connectivity:
 #        s = generate_binary_structure(2,2)
-#    incrementor = 0 # TODO: how should new values be generated???
+#    incrementor = 0 
 #    for val in values:
 #        single = geo_raster.raster.data.copy()
 #        isolate = single != val
 #        single[isolate] = NDV
 #        grouped, num_feats = label(single, 
-#                                   structure=s if zone_connectivity else None)    
+#                                   structure=s if zone_connectivity else None)
 #        if incrementor > 0:
 #            replace(grouped, incrementor, NDV)
 #        incrementor += num_feats
@@ -288,13 +330,13 @@ np.place(z, z>0, z[z>0]+y.max())
 #    values = np.delete(np.unique(x), NDV)
 #    if zone_connectivity:
 #        s = generate_binary_structure(2,2)
-#    incrementor = 0 # TODO: how should new values be generated???
+#    incrementor = 0
 #    for val in values:
 #        single = x.copy()
 #        isolate = single != val
 #        single[isolate] = NDV
-#        grouped, num_feats = label(single, 
-#                                   structure=s if zone_connectivity else None)    
+#        grouped, num_feats = label(single,
+#                                   structure=s if zone_connectivity else None)
 #        if incrementor > 0:
 #            replace(grouped, incrementor, NDV)
 #        incrementor += num_feats
