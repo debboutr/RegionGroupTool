@@ -29,38 +29,7 @@ from collections import defaultdict
 #from rasterio.windows import Window
 from scipy.ndimage import label, generate_binary_structure
 
-def fix_max(a,i,d):          
-    nums = list(np.unique(a)[1:])
-    nums.sort(reverse=True)          
-    for num in nums: #sorted return for covering NDV 0
-        if num not in d.keys():
-            a[a==num] = (i+1)
-            i += 1
-    return a   
 
-def equal(m,n):
-    if m==n:
-        return True
-    else:
-        return False
-    
-def get_connect(a,b):
-    out = {}
-    assert(len(a)==len(b))
-    uni = np.where(a!=NDV)[0]
-    for i in uni:
-        if a[i] in out.keys():
-            continue
-        if i == 0:
-            win = range(i,i+2) 
-        elif i == len(a):
-            win = range(i-1,i+1)
-        else:
-            win = range(i-1,i+2)
-        for j in win :        
-            if equal(a[i],b[j]) and not a[i] in out.keys():
-                out[a[i]] = (i,j)
-    return out
 
 def get_connections(a,b):
     start = 0
@@ -131,56 +100,101 @@ if __name__ == '__main__':
         profile = data.profile
 #        with rs.open('rio_carol.tif', 'w', **profile) as dst:
 #        print data.shape
-        NDV = data.nodata
+        NDV = data.nodata # ??? make this int
         windows = make_windows(data.shape[1],4)
 #        arr_max = 0
         c_orig = []
         idx = {}
         old_col_vals = []
-        link  = {}
+        link  = defaultdict(list)
         incrementor = 0
+        
+win = windows[0]
+win = windows[1]
+win = windows[2]
+win = windows[3]
+win = windows[4]
+        
         for win in windows:
             arr = data.read(window=win)[0]
 #            break
             # get matching vals
             if len(c_orig) > 0: # flag every arr after the first
                 c_next = arr[:,0] # get original values in first column
-                idx = get_connect(c_orig,c_next) # retain orig vals and idxs
+                connect_dict = get_connections(c_orig,c_next) # retain orig vals and idxs
             c_orig = arr[:,-1] # replace for next get_connect comparison
             new = region_group(arr, incrementor) # make new groups
             #np.place(new, new!=NDV, new[new!=NDV]+arr_max+100)
 
             # get old value as key with new[:,0] index as value
             # TODO: remake these assignments with new func
-            if len(old_col_vals)>0 and len(idx)>0:
-                kept = {}
-                for x in idx:
-                    # key = old-value, value = index in new arr
-                    kept[old_col_vals[idx[x][0]]] = idx[x][1]
-                # replace the value 
-                for val in kept: # val will be inserted over replace_val
-                    ix = kept[val] # get index of b
-                    replace_val = new[:,-0][ix] # then it's value,one to switch
-                    np.place(new,new==replace_val,val) 
-            print(np.unique(new))                    
+            if len(old_col_vals)>0 and len(connect_dict)>0:
+ 
+                for connection in connect_dict.items():
+#                    connection_val = connection[0]
+                    connection_idxs = connection[1]
+                    for indexes in connection_idxs:
+                        print indexes
+                        old_val = old_col_vals[indexes[0]]
+                        replace_val = new[:,0][indexes[1]]
+                        np.place(new,new==replace_val,old_val)
+                        
+#                for x in idx:
+#                    # key = old-value, value = index in new arr
+#                    kept[old_col_vals[idx[x][0]]] = idx[x][1]
+#                # replace the value 
+#                for val in kept: # val will be inserted over replace_val
+#                    ix = kept[val] # get index of b
+#                    replace_val = new[:,0][ix] # then it's value,one to switch
+#                    np.place(new,new==replace_val,val) 
+            print(np.unique(new))                  
             # match vals for link table
             new_vals = np.unique(new)
             for new_val in np.delete(new_vals,NDV): 
                 print(new_val)
                 item_idx = np.where(new==new_val)
                 old_val = arr[item_idx[0][0]][item_idx[1][0]]
-                if not old_val in link.keys():
-                    link[old_val] = new_val            
-            
+                if not any(new_val in e for e in link.values()):
+                    link[old_val].append(new_val)
+             
             old_col_vals = new[:,-1]
             incrementor = new.max()
             print('**********')
 
-win = windows[1]
-link_table = pd.DataFrame(link.items(),columns=['original_value','group_value'])
+link_table = pd.DataFrame([(h[0],j) for h in link.items() for j in h[1]], columns=['original_value','group_value'])
 
-
-
+#def fix_max(a,i,d):          
+#    nums = list(np.unique(a)[1:])
+#    nums.sort(reverse=True)          
+#    for num in nums: #sorted return for covering NDV 0
+#        if num not in d.keys():
+#            a[a==num] = (i+1)
+#            i += 1
+#    return a   
+#
+#def equal(m,n):
+#    if m==n:
+#        return True
+#    else:
+#        return False
+#    
+#def get_connect(a,b):
+#    out = {}
+#    assert(len(a)==len(b))
+#    uni = np.where(a!=NDV)[0]
+#    for i in uni:
+#        if a[i] in out.keys():
+#            continue
+#        if i == 0:
+#            win = range(i,i+2) 
+#        elif i == len(a):
+#            win = range(i-1,i+1)
+#        else:
+#            win = range(i-1,i+2)
+#        for j in win :        
+#            if equal(a[i],b[j]) and not a[i] in out.keys():
+#                out[a[i]] = (i,j)
+#    return out
 
             
 # go to new, get the zeroeth column and grab the new value, build a new dict
